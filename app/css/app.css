@@ -133,6 +133,13 @@ kbd { border: 1px solid var(--line-2); border-radius: 4px; padding: 0 5px; font-
 .chip-green { color: var(--green); border-color: var(--green-dim); background: var(--green-wash); }
 .chip-copper { color: var(--copper); border-color: var(--copper-dim); background: var(--copper-wash); }
 .chip-fail { color: var(--fail); border-color: var(--fail); background: color-mix(in srgb, var(--fail) 14%, transparent); }
+.chip-zero { color: var(--text-3); border-color: var(--line); background: transparent; opacity: .7; }
+
+/* Fixed 2x2 grid for the four evidence-state chips — always the same 4
+   cells regardless of which counts are zero, so the wrap pattern never
+   depends on the data (a conditionally-shown chip made the row 3-wide on
+   some datasets and 4-wide, awkwardly wrapping 3-then-1, on others). */
+.ev-chip-grid { display: grid; grid-template-columns: repeat(2, max-content); gap: 8px; justify-content: center; }
 
 /* ---------- home / hero ---------- */
 .hero { text-align: center; padding: 42px 0 34px; }

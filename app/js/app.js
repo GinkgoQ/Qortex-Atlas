@@ -12,7 +12,7 @@
    real remote-preview capability exists (DWI tractography), the UI says so
    plainly instead of fabricating one — evidence-first, never a guess. */
 
-import { Api } from './api.js';
+import { Api } from './api.js?v=4';
 
 /* ================= tiny dom (v2, unchanged) ================= */
 const $ = (s, r = document) => r.querySelector(s);
@@ -43,9 +43,14 @@ const EV_META = {
   confirmed: { icon: '✓', cls: 'chip-green' }, inferred: { icon: '≈', cls: 'chip-copper' },
   unknown: { icon: '?', cls: '' }, blocked: { icon: '✕', cls: 'chip-fail' },
 };
-function evChip(status, label) {
+function evChip(status, label, count = null) {
   const m = EV_META[status] ?? EV_META.unknown;
-  return el('span', { class: `chip ${m.cls}` }, el('span', { 'aria-hidden': 'true' }, m.icon), label ?? status);
+  // A zero count styled in full color (red "blocked", green "confirmed", …)
+  // reads as an active alarm/achievement when it's actually a non-event —
+  // most misleading for "0 blocked", which would otherwise be a bold red
+  // chip for the best possible outcome. Mute to neutral instead.
+  const cls = count === 0 ? 'chip chip-zero' : `chip ${m.cls}`;
+  return el('span', { class: cls }, el('span', { 'aria-hidden': 'true' }, m.icon), label ?? status);
 }
 
 /* ================= charts (v2, unchanged) ================= */
@@ -62,7 +67,13 @@ function donut({ size = 128, thick = 13, segs, centerVal, centerLab }) {
       'stroke-dasharray': `${Math.max(len - 2, 0)} ${C - len + 2}`, 'stroke-dashoffset': -off }));
     off += len;
   });
-  const wrap = el('div', { class: 'donut' });
+  // .donut's CSS has a fixed 128px box (the default `size`) — any caller
+  // passing a different `size` (Quality/Overview both pass 150) got an SVG
+  // wider than its own wrapper, overflowing to one side while the
+  // absolutely-positioned center label stayed centered on the *wrapper's*
+  // (wrong) box, visibly shifting the ring off from its own label. Size the
+  // wrapper from the real `size` every time instead of trusting the CSS default.
+  const wrap = el('div', { class: 'donut', style: `width:${size}px;height:${size}px` });
   wrap.append(svg, el('div', { class: 'donut-center' },
     el('div', {}, el('div', { class: 'dc-val' }, centerVal), el('div', { class: 'dc-lab' }, centerLab))));
   return wrap;
@@ -102,7 +113,6 @@ function hbars(rows) {
 
 /* ================= views ================= */
 const main = $('#main');
-let lastDatasetId = 'ds000117'; // powers the sidebar's contextual dataset shortcuts
 
 function panel(title, sub, body, headExtra) {
   return el('section', { class: 'panel' },
@@ -180,7 +190,11 @@ async function viewHome() {
       el('h1', { class: 'hero-title' }, 'Qortex ', el('span', { class: 't-atlas' }, 'Atlas')),
       el('p', { class: 'hero-tag' }, el('b', {}, 'Explore'), el('span', { class: 'dot' }, '. '), el('b', {}, 'Inspect'), el('span', { class: 'dot' }, '. '), el('b', {}, 'Understand'), ' neurodata', el('span', { class: 'dot' }, '.')),
       el('div', { class: 'hero-actions' },
-        el('a', { class: 'btn btn-green', href: '#/ds/ds000117/overview' }, 'Open ds000117'),
+        // Deliberately no featured dataset here — spotlighting one specific
+        // ID on the landing page of a tool spanning the whole OpenNeuro
+        // catalog reads as an endorsement of that dataset over every other,
+        // which isn't a call this UI should be making.
+        el('a', { class: 'btn btn-green', href: '#/datasets' }, 'Browse datasets'),
         el('a', { class: 'btn', href: '#/explore' }, 'Explore with a goal')),
     ),
   );
@@ -294,7 +308,6 @@ function dsHeaderFill(head, metaLine, profile) {
 }
 
 async function viewDataset(id, tab) {
-  lastDatasetId = id;
   const wrap = el('div', { class: 'wrap' });
   const { head, metaLine } = dsHeaderShell(id, tab);
   const body = el('div', {}, waitPanel(`Fetching ${id}'s profile from OpenNeuro.`, { height: 220 }));
@@ -783,9 +796,18 @@ async function tabQuality(body, profile) {
     body.append(el('div', { class: 'bento' },
       el('div', { class: 'span-4 panel' }, el('div', { class: 'panel-b', style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:32px 16px;min-height:280px' },
         donut({ size: 150, thick: 15, segs: [{ label: 'Passed', v: Math.max(passed, 0), color: 'var(--good)' }, { label: 'Warnings', v: warn, color: 'var(--warn)' }, { label: 'Failed', v: fail, color: 'var(--fail)' }], centerVal: `${r.readiness.n_recordings}`, centerLab: 'Recordings' }),
-        el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;justify-content:center' },
-          evChip('confirmed', `${r.evidence.counts.confirmed} confirmed`), evChip('inferred', `${r.evidence.counts.inferred} inferred`),
-          evChip('unknown', `${r.evidence.counts.unknown} unknown`), r.evidence.counts.blocked ? evChip('blocked', `${r.evidence.counts.blocked} blocked`) : null))),
+        // Fixed 2x2 grid, always all four states — conditionally hiding
+        // "blocked" when it's 0 meant the chip count (and so the flex-wrap
+        // line break) varied per dataset: 4 chips wrapped 3-then-1
+        // (stranding one chip off-center on its own line), 3 chips didn't
+        // wrap at all. A grid with a fixed cell count wraps the same way
+        // every time, and "0 blocked" is itself real evidence worth
+        // stating, not a state to hide.
+        el('div', { class: 'ev-chip-grid' },
+          evChip('confirmed', `${r.evidence.counts.confirmed} confirmed`, r.evidence.counts.confirmed),
+          evChip('inferred', `${r.evidence.counts.inferred} inferred`, r.evidence.counts.inferred),
+          evChip('unknown', `${r.evidence.counts.unknown} unknown`, r.evidence.counts.unknown),
+          evChip('blocked', `${r.evidence.counts.blocked} blocked`, r.evidence.counts.blocked)))),
       el('div', { class: 'span-8 panel' },
         el('div', { class: 'panel-h' }, el('h3', {}, 'Checks'), el('span', { class: 'sub' }, `${checks.length} distinct issues · ${r.readiness.n_recordings} recordings scanned`)),
         // Bounded + scrollable rather than growing without limit: a dataset
