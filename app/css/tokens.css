@@ -1,0 +1,77 @@
+/* ==========================================================================
+   Qortex Atlas — design tokens
+   GinkgoQ design language (~/project/design_system.md): ginkgo green #79863c
+   is the only brand accent. Layout/structure is v2's (bento grid, panels,
+   donut/hbar charts, tree explorer, viewer planes, knowledge graph),
+   authored dark-first ("cinematic dark workbench") — kept as the default
+   here, with light as the explicit toggle, exactly as v2 intended.
+   Variable NAMES are v2's own (--green, --panel, --line, --copper, ...) so
+   its CSS body works unchanged — only the values were swapped to GinkgoQ's.
+   "Copper" is retired as a brand color (GinkgoQ: green is the only accent)
+   and repointed to the validated data-amber used for the Atlas categorical
+   series (series-3) — data-only from here on, never brand identity.
+   ========================================================================== */
+
+:root {
+  --font: "Inter", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+
+  /* GinkgoQ dark surfaces (default) */
+  --bg0: #0a0b0d;
+  --bg1: #0d0f15;
+  --panel: #14161e;
+  --panel-2: #1a1d28;
+  --panel-3: #222638;
+  --line: #2a2f43;
+  --line-2: #383e56;
+  --text: #eceef8;
+  --text-2: #a1a6bc;
+  --text-3: #747b98;
+
+  --green: #79863c;            /* ginkgo green — the only brand accent */
+  --green-deep: #9baa60;
+  --green-dim: rgba(121, 134, 60, 0.22);
+  --green-wash: rgba(121, 134, 60, 0.16);
+
+  /* retired brand color — now a data-only amber (matches the validated
+     Atlas categorical series-3), used for KG task nodes, chip-copper,
+     JSON value syntax color, activation-style sequential accents. Never
+     used for brand/logo/wordmark identity (see .t-atlas → var(--green)). */
+  --copper: #c98500;
+  --copper-dim: #eda100;
+  --copper-wash: rgba(201, 133, 0, 0.16);
+
+  --good: #0ca30c; --warn: #fab219; --fail: #e66767;
+
+  /* categorical (validated, fixed order, labels always) */
+  --c-dataset: #3987e5;    /* blue   */
+  --c-modality: #199e70;   /* aqua   */
+  --c-task: #c98500;       /* amber  */
+  --c-participant: #9085e9;/* violet */
+  --c-file: #008300;       /* green  */
+
+  --r-s: 6px; --r-m: 10px; --r-l: 14px;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --shadow: 0 24px 80px rgb(0 0 0 / .5), 0 4px 18px rgb(0 0 0 / .35);
+  --side-w: 208px; --top-h: 56px;
+}
+
+[data-theme="light"] {
+  --bg0: #f3f4ef; --bg1: #f8f8f5;
+  --panel: #ffffff; --panel-2: #fafaf8; --panel-3: #f3f3ef;
+  --line: #d8d8cf; --line-2: #c6c6bb;
+  --text: #101114; --text-2: #52514e; --text-3: #898781;
+
+  --green: #79863c; --green-deep: #667231; --green-dim: rgba(121,134,60,.1);
+  --green-wash: rgba(121, 134, 60, 0.10);
+  --copper: #eda100; --copper-dim: #c98500; --copper-wash: rgba(237,161,0,.12);
+
+  --good: #0ca30c; --warn: #fab219; --fail: #d03b3b;
+  --c-dataset: #2a78d6; --c-modality: #1baf7a; --c-task: #eda100;
+  --c-participant: #4a3aa7; --c-file: #008300;
+  --shadow: 0 24px 80px rgb(0 0 0 / .09), 0 4px 18px rgb(0 0 0 / .06);
+}
+
+/* system preference: dark stays default (see :root); light only on explicit
+   preference + no saved override, handled in JS by writing data-theme
+   directly, so no extra media-query block is needed here. */
