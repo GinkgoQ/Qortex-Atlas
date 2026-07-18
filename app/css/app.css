@@ -779,6 +779,9 @@ svg.chart { width: 100%; height: auto; display: block; }
 .coverage-swatch { width: 13px; height: 13px; border: 1px solid var(--line-2); border-radius: 3px; }
 .coverage-swatch.coverage-available, .coverage-cell.coverage-available { background: var(--green); }
 .coverage-swatch.coverage-not_observed, .coverage-cell.coverage-not_observed { background: var(--panel-2); }
+.coverage-swatch.coverage-missing, .coverage-cell.coverage-missing { background: var(--fail); }
+.coverage-swatch.coverage-not_expected, .coverage-cell.coverage-not_expected { background: var(--panel-2); opacity: .48; }
+.coverage-swatch.coverage-unexpected_available, .coverage-cell.coverage-unexpected_available { background: var(--warn); }
 .coverage-note { max-width: 920px; margin-bottom: 10px; }
 .coverage-scroll { max-height: 520px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 .coverage-table { border-collapse: separate; border-spacing: 3px; min-width: 100%; font-size: 11px; }

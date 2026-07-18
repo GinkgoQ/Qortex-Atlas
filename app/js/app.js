@@ -12,7 +12,7 @@
    real remote-preview capability exists (DWI tractography), the UI says so
    plainly instead of fabricating one — evidence-first, never a guess. */
 
-import { Api } from './api.js?v=53';
+import { Api } from './api.js?v=57';
 import { Niivue, NVImage, SHOW_RENDER, MULTIPLANAR_TYPE } from './vendor/niivue.esm.js';
 
 /* ================= tiny dom (v2, unchanged) ================= */
@@ -792,7 +792,7 @@ async function tabBids(body, profile) {
   body.append(el('div', { class: 'explorer' },
     panel('BIDS / Manifest Explorer', `${fmt(manifest.total_matching)} files`, tree),
     el('section', { class: 'panel meta-pane' }, el('div', { class: 'panel-h' }, el('h3', {}, 'File metadata')), el('div', { class: 'panel-b' }, metaPane)),
-  ), renderCoveragePanel(coverage));
+  ), coverageDesignWorkspace(coverage, profile));
   renderMeta();
 }
 
@@ -805,15 +805,101 @@ function renderCoveragePanel(report) {
   const rows = report.subjects.map(row => el('tr', {}, el('th', { class: 'coverage-subject mono' }, row.subject),
     ...row.cells.map(cell => el('td', { class: `coverage-cell coverage-${cell.status}`, title: cell.paths.length ? cell.paths.join('\n') : report.absence_note },
       el('span', { class: 'sr-only' }, cell.status.replaceAll('_', ' '))))));
-  const fraction = report.observed_fraction == null ? '—' : `${(report.observed_fraction * 100).toFixed(1)}%`;
-  return panel('Subject × recording coverage', `${report.total_subjects} subjects · ${report.columns.length} observed recording definitions`,
+  const fraction = report.observed_fraction == null ? null : `${(report.observed_fraction * 100).toFixed(1)}%`;
+  const designMode = report.absence_semantics === 'explicit_design_contract';
+  const legend = designMode
+    ? [['available', 'Available'], ['missing', 'Missing'], ['not_expected', 'Not expected'], ['unexpected_available', 'Unexpected available']]
+    : [['available', 'Available'], ['not_observed', 'Not observed']];
+  return panel('Subject × recording coverage', `${report.total_subjects} subjects · ${report.columns.length} ${designMode ? 'declared' : 'observed'} recording definitions`,
     el('div', {},
       el('div', { class: 'coverage-summary' },
-        el('span', {}, el('span', { class: 'coverage-swatch coverage-available' }), 'Available'),
-        el('span', {}, el('span', { class: 'coverage-swatch coverage-not_observed' }), 'Not observed'),
-        el('span', { class: 'sp' }), el('b', {}, `${fraction} observed on this page`)),
+        ...legend.map(([status, label]) => el('span', {}, el('span', { class: `coverage-swatch coverage-${status}` }), label)),
+        el('span', { class: 'sp' }),
+        designMode ? el('b', { class: 'mono', title: report.contract_sha256 }, `Contract ${report.contract_sha256.slice(0, 12)}…`)
+          : el('b', {}, `${fraction} observed on this page`)),
       el('p', { class: 'sub coverage-note' }, report.absence_note),
       el('div', { class: 'coverage-scroll' }, el('table', { class: 'coverage-table' }, el('thead', {}, head), el('tbody', {}, ...rows)))));
+}
+
+function coverageDesignWorkspace(observedReport, profile) {
+  const wrap = el('div', {});
+  const matrixHost = el('div', {}, renderCoveragePanel(observedReport));
+  if (observedReport?.error || !observedReport?.subjects?.length || !observedReport?.columns?.length) return matrixHost;
+  const expectations = [];
+  const columnSelect = el('select', { class: 'select', 'aria-label': 'Design recording definition' },
+    ...observedReport.columns.map((column, index) => el('option', { value: String(index) }, column.label)));
+  const subjectsInput = el('input', {
+    class: 'input', type: 'text', value: observedReport.subjects.map(row => row.subject).join(', '),
+    'aria-label': 'Expected subjects', placeholder: 'sub-01, sub-02',
+  });
+  const addButton = el('button', { class: 'btn btn-sm' }, 'Add expectation');
+  const evaluateButton = el('button', { class: 'btn btn-green', disabled: true }, 'Evaluate declared design');
+  const resetButton = el('button', { class: 'btn btn-sm' }, 'Restore observed-only view');
+  const rowsHost = el('div', { class: 'tblw' });
+  const resultNote = el('div');
+  function renderExpectations() {
+    evaluateButton.disabled = !expectations.length;
+    rowsHost.innerHTML = '';
+    if (!expectations.length) {
+      rowsHost.append(el('p', { class: 'sub', style: 'padding:10px' }, 'No recording definition has been declared expected.'));
+      return;
+    }
+    rowsHost.append(el('table', { class: 't' },
+      el('thead', {}, el('tr', {}, el('th', {}, 'Recording definition'), el('th', {}, 'Expected subjects'), el('th', {}, ''))),
+      el('tbody', {}, ...expectations.map((item, index) => el('tr', {},
+        el('td', { class: 'mono' }, item.label), el('td', { class: 'mono' }, item.expected_subjects.join(', ')),
+        el('td', {}, el('button', { class: 'btn btn-sm', onclick: () => { expectations.splice(index, 1); renderExpectations(); } }, 'Remove')))))));
+  }
+  addButton.onclick = () => {
+    const column = observedReport.columns[Number(columnSelect.value)];
+    const expectedSubjects = [...new Set(subjectsInput.value.split(',').map(value => value.trim()).filter(Boolean))];
+    if (!expectedSubjects.length) {
+      resultNote.innerHTML = '';
+      resultNote.append(errorPanel(new Error('Declare at least one exact expected subject.')));
+      return;
+    }
+    const unknown = expectedSubjects.filter(subject => !observedReport.subjects.some(row => row.subject === subject));
+    if (unknown.length) {
+      resultNote.innerHTML = '';
+      resultNote.append(errorPanel(new Error(`Unknown subjects on this page: ${unknown.join(', ')}`)));
+      return;
+    }
+    const selector = Object.fromEntries(['session', 'task', 'run', 'modality', 'suffix'].map(key => [key, column[key] ?? null]));
+    const existing = expectations.findIndex(item => JSON.stringify(item.selector) === JSON.stringify(selector));
+    const expectation = { id: `design-${column.id}`, selector, expected_subjects: expectedSubjects, label: column.label };
+    if (existing >= 0) expectations[existing] = expectation; else expectations.push(expectation);
+    resultNote.innerHTML = '';
+    renderExpectations();
+  };
+  evaluateButton.onclick = async () => {
+    evaluateButton.disabled = true;
+    resultNote.innerHTML = '';
+    resultNote.append(waitRow('Evaluating exact selectors against immutable manifest records…'));
+    try {
+      const report = await Api.evaluateCoverageDesign(profile.dataset_id, profile.snapshot, {
+        expectations: expectations.map(({ label, ...item }) => item), offset: observedReport.offset, limit: observedReport.limit,
+      });
+      matrixHost.replaceChildren(renderCoveragePanel(report));
+      resultNote.innerHTML = '';
+      resultNote.append(el('p', { class: 'sub mono' }, `Contract SHA-256 ${report.contract_sha256}`));
+    } catch (err) {
+      resultNote.innerHTML = '';
+      resultNote.append(errorPanel(err));
+    } finally {
+      evaluateButton.disabled = !expectations.length;
+    }
+  };
+  resetButton.onclick = () => {
+    matrixHost.replaceChildren(renderCoveragePanel(observedReport));
+    resultNote.innerHTML = '';
+  };
+  const controls = panel('Explicit study-design contract', 'exact BIDS entities · no inferred expectations', el('div', {},
+    el('p', { class: 'sub' }, 'Choose a structured recording definition and list the subjects for whom it is required. Only this declaration can turn an absent manifest cell into Missing; all other absent cells become Not expected.'),
+    el('div', { class: 'conversion-controls' }, labeled('Recording definition', columnSelect), labeled('Expected subjects', subjectsInput), addButton, evaluateButton, resetButton),
+    rowsHost, resultNote));
+  renderExpectations();
+  wrap.append(matrixHost, controls);
+  return wrap;
 }
 // Shared by the BIDS explorer tab and the Viewer Lab's file browser — one
 // tree-building pass over a flat manifest file list, two entry points.
@@ -895,7 +981,8 @@ function fileKind(f) {
 function tinyTable(cols, rows) {
   return el('div', { class: 'tblw', style: 'margin-top:8px' }, el('table', { class: 't' },
     el('thead', {}, el('tr', {}, ...(cols || []).map(c => el('th', {}, c)))),
-    el('tbody', {}, ...rows.map(r => el('tr', {}, ...(cols || []).map(c => el('td', { class: 'mono', style: 'font-size:11px' }, String(r[c] ?? ''))))))));
+    el('tbody', {}, ...rows.map(r => el('tr', {}, ...(cols || []).map((c, index) =>
+      el('td', { class: 'mono', style: 'font-size:11px' }, String((Array.isArray(r) ? r[index] : r[c]) ?? ''))))))));
 }
 function jsonView(obj) {
   const pre = el('pre', { class: 'jsonview' });
@@ -1191,6 +1278,10 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
   const OVERLAY_SWATCH = { red: '#e0705f', blue: '#3987e5', green: '#199e70', warm: '#c98500', violet: '#9085e9', cool: '#3fb6c9' };
   const overlayState = overlayCandidates.map((f, i) => ({ file: f, visible: false, opacity: 0.6, volIdx: null, loading: false, colormap: OVERLAY_COLORS[i % OVERLAY_COLORS.length] }));
   const roiResults = [];
+  let activeLayout = 'grid';
+  let currentFrame = 0;
+  let annotationRows = [];
+  let activeAnnotation = null;
 
   // ---------- top toolbar ----------
   function goTab(tab) { location.hash = `#/ds/${id}/${tab}`; }
@@ -1202,6 +1293,7 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
 
   const layoutBtns = {};
   function setActiveLayout(key) {
+    activeLayout = key;
     Object.entries(layoutBtns).forEach(([k, b]) => b.setAttribute('aria-pressed', String(k === key)));
     const is3D = key === 'render';
     paneGrid.dataset.mode = key;
@@ -1300,8 +1392,8 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
 
   // ---------- right inspector ----------
   const rightBody = el('div', { class: 'inspector-body' });
-  const rightTabs = ['info', 'overlays', 'measurements'];
-  const rightTabLabels = { info: 'Info', overlays: 'Overlays', measurements: 'Measurements' };
+  const rightTabs = ['info', 'overlays', 'measurements', 'annotations'];
+  const rightTabLabels = { info: 'Info', overlays: 'Overlays', measurements: 'Measurements', annotations: 'Annotations' };
   const rightTabBar = el('div', { class: 'inspector-tabs' },
     ...rightTabs.map(t => el('button', { class: 'inspector-tab', 'aria-selected': String(t === rightTabState), onclick: () => setRightTab(t) }, rightTabLabels[t])));
   function setRightTab(t) {
@@ -1370,7 +1462,7 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
     } else if (rightTabState === 'overlays') {
       renderOverlaySection(rightBody, true);
       renderQuickStats(rightBody);
-    } else {
+    } else if (rightTabState === 'measurements') {
       const measurements = nv.document.completedMeasurements;
       if (!measurements.length && !roiResults.length) {
         rightBody.append(el('p', { class: 'sub', style: 'font-size:12px' }, 'No measurements yet. Use Measure (drag = affine-aware distance) or ROI (drag a box = intensity stats) from the tool row.'));
@@ -1386,6 +1478,8 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
       rightBody.append(el('div', { style: 'margin-top:10px;display:flex;gap:6px' },
         el('button', { class: 'btn btn-sm', onclick: () => exportMeasurements('json') }, 'Export JSON'),
         el('button', { class: 'btn btn-sm', onclick: () => exportMeasurements('csv') }, 'Export CSV')));
+    } else {
+      renderAnnotationInspector();
     }
   }
   function renderOverlaySection(host, standalone = false) {
@@ -1452,6 +1546,141 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
       : new Blob([['type,value,unit,mean,std,min,max,n', ...rows.map(r => `${r.type},${r.value ?? ''},${r.unit ?? ''},${r.mean ?? ''},${r.std ?? ''},${r.min ?? ''},${r.max ?? ''},${r.n ?? ''}`)].join('\n')], { type: 'text/csv' });
     const a = el('a', { href: URL.createObjectURL(blob), download: `measurements.${fmtKind}` });
     a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  function annotationPayload(title) {
+    const distances = nv.document.completedMeasurements.map((measurement, index) => ({
+      id: `distance-${index + 1}`, kind: 'distance', distance_mm: Number(measurement.distance),
+    }));
+    const rois = roiResults.map((roi, index) => ({
+      id: `roi-${index + 1}`, kind: 'roi',
+      start_voxel: Array.from(roi.startVox, value => Math.round(value)),
+      end_voxel: Array.from(roi.endVox, value => Math.round(value)),
+      mean: roi.mean, std: roi.std, min: roi.min, max: roi.max,
+      voxel_count: roi.n, volume_mm3: roi.volumeMm3,
+    }));
+    const crosshairVoxel = Array.from(nv.frac2vox(nv.scene.crosshairPos), value => Math.round(value));
+    const crosshairWorld = Array.from(nv.frac2mm(nv.scene.crosshairPos)).slice(0, 3).map(Number);
+    const bookmark = { id: 'bookmark-current', name: 'Saved view', voxel: crosshairVoxel, world_mm: crosshairWorld, frame: currentFrame };
+    return {
+      title,
+      layers: [
+        { id: 'distance-layer', name: 'Distances', kind: 'measurements', visible: true, color: '#47d7ac', item_ids: distances.map(item => item.id) },
+        { id: 'roi-layer', name: 'ROIs', kind: 'rois', visible: true, color: '#e0a339', item_ids: rois.map(item => item.id) },
+        { id: 'bookmark-layer', name: 'Bookmarks', kind: 'bookmarks', visible: true, color: '#3987e5', item_ids: [bookmark.id] },
+      ],
+      measurements: [...distances, ...rois],
+      bookmarks: [bookmark],
+      viewport: {
+        crosshair_voxel: crosshairVoxel, crosshair_world_mm: crosshairWorld,
+        frame: currentFrame, layout: activeLayout, cal_min: Number(vol0.cal_min), cal_max: Number(vol0.cal_max),
+      },
+    };
+  }
+
+  async function refreshAnnotations() {
+    const response = await Api.annotations(id, { snapshot, sourcePath: path });
+    annotationRows = response.annotations || [];
+    if (rightTabState === 'annotations') renderRightBody();
+  }
+
+  async function loadAnnotation(annotationId, revision = undefined) {
+    activeAnnotation = await Api.annotation(id, annotationId, { snapshot, revision });
+    const view = activeAnnotation.viewport;
+    vol0.cal_min = view.cal_min;
+    vol0.cal_max = view.cal_max;
+    nv.updateGLVolume();
+    nv.scene.crosshairPos = nv.vox2frac(view.crosshair_voxel);
+    currentFrame = view.frame;
+    if (is4d) nv.setFrame4D(vol0.id, Math.min(view.frame, (vol0.nTotalFrame4D || vol0.nFrame4D) - 1));
+    setActiveLayout(view.layout);
+    nv.createOnLocationChange();
+    nv.drawScene();
+    renderRightBody();
+    announce(`Restored annotation ${activeAnnotation.title}, revision ${activeAnnotation.revision}`);
+  }
+
+  async function persistAnnotation(title, updateExisting) {
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error('Annotation title is required.');
+    const body = { source_path: path, payload: annotationPayload(trimmed) };
+    if (updateExisting) {
+      if (!activeAnnotation) throw new Error('Select an existing annotation before updating.');
+      body.annotation_id = activeAnnotation.annotation_id;
+      body.expected_revision = activeAnnotation.revision;
+    }
+    activeAnnotation = await Api.saveAnnotation(id, snapshot, body);
+    await refreshAnnotations();
+    toast(`Annotation ${updateExisting ? 'updated' : 'saved'} · revision ${activeAnnotation.revision}`);
+  }
+
+  function renderAnnotationInspector() {
+    const titleInput = el('input', {
+      class: 'input', type: 'text', maxlength: '200', value: activeAnnotation?.title || `${fileName} review`,
+      'aria-label': 'Annotation title',
+    });
+    const status = el('div');
+    const saveNew = el('button', { class: 'btn btn-sm' }, 'Save new');
+    const update = el('button', { class: 'btn btn-sm', disabled: !activeAnnotation }, 'Update selected');
+    const importInput = el('input', { type: 'file', accept: 'application/json', class: 'sr-only', 'aria-label': 'Import annotation JSON' });
+    const importButton = el('button', { class: 'btn btn-sm', onclick: () => importInput.click() }, 'Import JSON');
+    const runSave = async (isUpdate) => {
+      saveNew.disabled = true; update.disabled = true; status.innerHTML = '';
+      status.append(el('p', { class: 'sub' }, 'Validating and writing an immutable annotation revision…'));
+      try {
+        await persistAnnotation(titleInput.value, isUpdate);
+        if (rightTabState === 'annotations') renderRightBody();
+      } catch (err) {
+        status.innerHTML = ''; status.append(errorPanel(err));
+        saveNew.disabled = false; update.disabled = !activeAnnotation;
+      }
+    };
+    saveNew.onclick = () => runSave(false);
+    update.onclick = () => runSave(true);
+    importInput.onchange = async () => {
+      const file = importInput.files?.[0];
+      if (!file) return;
+      try {
+        const imported = JSON.parse(await file.text());
+        const payload = Object.fromEntries(['title', 'layers', 'measurements', 'bookmarks', 'viewport'].map(key => [key, imported[key]]));
+        activeAnnotation = await Api.saveAnnotation(id, snapshot, { source_path: path, payload });
+        await refreshAnnotations();
+        toast(`Imported annotation ${activeAnnotation.annotation_id}`);
+        if (rightTabState === 'annotations') renderRightBody();
+      } catch (err) { status.innerHTML = ''; status.append(errorPanel(err)); }
+      finally { importInput.value = ''; }
+    };
+    rightBody.append(
+      el('div', { class: 'inspector-sec-h' }, 'Versioned annotation document'),
+      el('p', { class: 'sub', style: 'font-size:11px' }, `Bound to ${id}@${snapshot} · ${path}. Saving captures typed measurements, ROI voxel bounds, a bookmark, window, frame, and layout.`),
+      titleInput,
+      el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' }, saveNew, update, importButton, importInput),
+      status,
+    );
+    if (activeAnnotation) {
+      const selected = activeAnnotation;
+      rightBody.append(el('div', { class: 'demographic-warning' },
+        el('b', {}, `${selected.title} · revision ${selected.revision}`),
+        el('span', { class: 'mono' }, selected.annotation_id),
+        el('span', {}, `${selected.measurements.length} measurements · ${selected.bookmarks.length} bookmark · ${selected.layers.length} layers`)),
+        el('div', { style: 'display:flex;gap:6px;margin:8px 0' },
+          el('button', { class: 'btn btn-sm', onclick: () => loadAnnotation(selected.annotation_id) }, 'Restore selected view'),
+          el('button', { class: 'btn btn-sm', onclick: () => {
+            const blob = new Blob([JSON.stringify(selected, null, 2)], { type: 'application/json' });
+            const link = el('a', { href: URL.createObjectURL(blob), download: `${selected.annotation_id}-r${selected.revision}.json` });
+            link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+          } }, 'Export selected JSON')));
+      selected.measurements.forEach(item => rightBody.append(el('div', { class: 'measure-row measure-row-stack' },
+        el('span', {}, item.kind === 'distance' ? item.id : `${item.id} · ${item.voxel_count} voxels`),
+        el('span', { class: 'mono' }, item.kind === 'distance' ? `${item.distance_mm.toFixed(2)} mm` : `mean ${fmtIntensity(item.mean)} · sd ${fmtIntensity(item.std)}`))));
+    }
+    rightBody.append(el('div', { class: 'inspector-sec-h' }, `Saved for this source (${annotationRows.length})`));
+    if (!annotationRows.length) rightBody.append(el('p', { class: 'sub', style: 'font-size:11px' }, 'No server-backed annotations exist for this source.'));
+    annotationRows.forEach(row => rightBody.append(el('button', {
+      class: 'qrow', style: 'width:100%;text-align:left;background:none;border:none;cursor:pointer',
+      onclick: () => loadAnnotation(row.annotation_id),
+    }, el('span', { class: 'qmark-s q-pass' }), el('span', {},
+      el('b', {}, row.title), el('span', { class: 'sub mono' }, `${row.annotation_id} · r${row.revision} · ${row.measurement_count} measurements`)))));
   }
   nv.onMeasurementCompleted = () => renderRightBody();
 
@@ -1527,7 +1756,11 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
     const endVox = a.map((v, i) => Math.max(v, b[i])).map(Math.round);
     const info = nv.getDescriptives({ layer: 0, roiIsMask: true, startVox, endVox });
     roiBox.classList.remove('roi-box-pending');
-    roiResults.push({ mean: info.mean, std: info.stdev ?? info.std, min: info.min, max: info.max, n: info.nvox ?? info.n, volumeMm3: info.volumeMM3, boxEl: roiBox });
+    roiResults.push({
+      mean: info.mean, std: info.stdev ?? info.std, min: info.min, max: info.max,
+      n: info.nvox ?? info.n, volumeMm3: info.volumeMM3,
+      startVox, endVox, boxEl: roiBox,
+    });
     roiBox = null;
     setRightTab('measurements');
     announce(`ROI: mean ${fmtIntensity(info.mean)}, n=${info.nvox ?? info.n} voxels`);
@@ -1544,7 +1777,7 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
     const stepF = el('button', { class: 'ws-cine-btn', title: 'Next frame', onclick: () => setTime(time + 1) }, wsIcon('step-f'));
     const fpsLabel = el('span', { class: 'mono ws-cine-fps' }, `${fps} fps`);
     cineBlock.append(el('span', { class: 'ws-cine-title' }, 'CINE'), stepB, playBtn, stepF, tSlider, tLabel, fpsLabel);
-    function setTime(t) { time = ((t % nFrames) + nFrames) % nFrames; tSlider.value = time; tLabel.textContent = `${time} / ${nFrames - 1}`; nv.setFrame4D(vol0.id, time); }
+    function setTime(t) { time = ((t % nFrames) + nFrames) % nFrames; currentFrame = time; tSlider.value = time; tLabel.textContent = `${time} / ${nFrames - 1}`; nv.setFrame4D(vol0.id, time); }
     tSlider.addEventListener('input', () => setTime(+tSlider.value));
     function togglePlay() {
       playing = !playing;
@@ -1564,6 +1797,7 @@ async function _niivueLoadAsync(slots, id, path, snapshot, sizeBytes, manifestFi
   setActiveLayout('grid');
   setMode('crosshair');
   statusText.textContent = 'Volume loaded';
+  refreshAnnotations().catch(err => toast(`Annotation inventory unavailable: ${err.message}`, 'fail'));
 }
 
 
@@ -2089,6 +2323,11 @@ function fmriQcPanel(payload, profile) {
   const report = payload.report;
   const fd = report.framewise_displacement;
   const dvars = report.dvars;
+  const fdThreshold = el('input', { class: 'input signal-number', type: 'number', min: '0', step: '0.05', value: fd.threshold_mm ?? 0.5, 'aria-label': 'Framewise displacement threshold in millimeters' });
+  const dvarsThreshold = el('input', { class: 'input signal-number', type: 'number', min: '0', step: '0.1', value: dvars.threshold ?? '', placeholder: 'disabled', 'aria-label': 'DVARS threshold' });
+  const maxFrames = el('input', { class: 'input signal-number', type: 'number', min: '2', max: '2000', step: '1', value: report.n_volumes_analyzed, 'aria-label': 'Maximum consecutive frames' });
+  const persistButton = el('button', { class: 'btn btn-green' }, 'Persist QC and scrub plan');
+  const persistResult = el('div', { class: 'model-validation-result' });
   content.append(
     el('div', { class: 'readiness-facts qc-facts' },
       ...[
@@ -2111,7 +2350,55 @@ function fmriQcPanel(payload, profile) {
       el('span', {}, `Mask: ${report.brain_mask.method}.`),
       el('span', {}, `DVARS: ${dvars.method}.`),
       el('span', {}, report.scrubbing.note),
-      report.confounds_path ? el('span', { class: 'mono' }, `Confounds: ${report.confounds_path}`) : null));
+      report.confounds_path ? el('span', { class: 'mono' }, `Confounds: ${report.confounds_path}`) : null),
+    el('div', { class: 'signal-controls' },
+      labeled('FD threshold (mm)', fdThreshold), labeled('DVARS threshold', dvarsThreshold),
+      labeled('Max frames', maxFrames), persistButton),
+    el('p', { class: 'sub' }, 'Persistence reruns the real source with these thresholds, writes an immutable scrub plan, framewise CSV, mean-BOLD NIfTI, environment record, and SHA-256 inventory. The source NIfTI is never modified.'),
+    persistResult);
+
+  persistButton.onclick = async () => {
+    persistButton.disabled = true;
+    persistResult.innerHTML = '';
+    const status = el('div', { class: 'sub' }, 'Submitting artifact-backed QC job…');
+    const bar = el('div', { class: 'jprog' }, el('div', { style: 'width:0%' }));
+    persistResult.append(status, bar);
+    try {
+      const accepted = await Api.startFmriQcRun(profile.dataset_id, profile.snapshot, {
+        path: payload.selected_path,
+        max_frames: Number(maxFrames.value),
+        fd_threshold_mm: Number(fdThreshold.value),
+        dvars_threshold: dvarsThreshold.value === '' ? null : Number(dvarsThreshold.value),
+      });
+      const result = await new Promise((resolve, reject) => {
+        const timer = setInterval(async () => {
+          try {
+            const job = await Api.job(accepted.job_id);
+            bar.firstChild.style.width = `${job.progress || 0}%`;
+            status.textContent = `Computing and hashing QC artifacts · ${job.progress || 0}%`;
+            if (job.status === 'done') { clearInterval(timer); resolve(job.result); }
+            else if (job.status === 'error') { clearInterval(timer); reject(new Error(job.error || 'fMRI QC persistence failed.')); }
+          } catch (err) { clearInterval(timer); reject(err); }
+        }, 750);
+      });
+      persistResult.innerHTML = '';
+      persistResult.append(
+        el('div', { class: 'demographic-warning' }, el('b', {}, `Run ${result.run_id} persisted`),
+          el('span', {}, `${result.scrub_plan.flagged_volumes.length} flagged · ${result.scrub_plan.retained_volumes.length} retained · ${result.runtime.elapsed_seconds.toFixed(3)} s`)),
+        el('div', { class: 'model-artifact-links' }, ...Object.entries(result.artifacts).map(([name]) => {
+          const evidence = result.artifact_inventory?.[name];
+          return el('a', {
+            class: 'btn btn-sm', href: Api.fmriQcArtifactUrl(result.run_id, name), target: '_blank', rel: 'noreferrer',
+            title: evidence?.sha256 ? `SHA-256 ${evidence.sha256} · ${fmtBytes(evidence.size_bytes)}` : 'Provenance record',
+          }, name.replaceAll('_', ' '));
+        })));
+    } catch (err) {
+      persistResult.innerHTML = '';
+      persistResult.append(errorPanel(err));
+    } finally {
+      persistButton.disabled = false;
+    }
+  };
 
   if (select) select.addEventListener('change', async () => {
     select.disabled = true;
@@ -2194,6 +2481,7 @@ function renderLocalBidsValidation(host, result, datasetId) {
 }
 
 async function tabQuality(body, profile, readinessQuery = {}) {
+  readinessQuery = readinessQuery || {};
   const id = profile.dataset_id;
   body.innerHTML = '';
   body.append(waitPanel('Computing readiness from the full file manifest.', { height: 300, eta: { operation: 'readiness', key: id } }));
@@ -2227,9 +2515,29 @@ async function tabQuality(body, profile, readinessQuery = {}) {
       class: 'input', type: 'text', placeholder: 'Explicit label target',
       value: readinessQuery.target || r.can_train.target || '', 'aria-label': 'Readiness label target',
     });
+    const labelColumnControl = el('input', {
+      class: 'input', type: 'text', placeholder: 'events.tsv label column',
+      value: readinessQuery.label_column || r.can_train.label_policy?.column || '',
+      'aria-label': 'Explicit events label column',
+    });
+    const missingControl = el('select', { class: 'select', 'aria-label': 'Missing label behavior' },
+      ...['drop', 'keep', 'error'].map(value => el('option', {
+        value, selected: value === (readinessQuery.label_missing || r.can_train.label_policy?.missing || 'drop'),
+      }, `Missing: ${value}`)));
+    const splitControl = el('select', { class: 'select', 'aria-label': 'Train test split grouping' },
+      ...[
+        ['subject', 'Split by subject'],
+        ['subject_session', 'Split by subject/session'],
+        ['recording', 'Split by recording'],
+      ].map(([value, label]) => el('option', {
+        value, selected: value === (readinessQuery.split_strategy || r.can_train.split_strategy || 'subject'),
+      }, label)));
     const recalculateReadiness = el('button', { class: 'btn btn-sm', onclick: () => tabQuality(body, profile, {
       modality: modalityControl.value || undefined,
       target: targetControl.value.trim() || undefined,
+      label_column: labelColumnControl.value.trim() || undefined,
+      label_missing: missingControl.value,
+      split_strategy: splitControl.value,
     }) }, 'Recalculate decision');
     body.innerHTML = '';
     body.append(el('div', { class: 'bento' },
@@ -2259,18 +2567,21 @@ async function tabQuality(body, profile, readinessQuery = {}) {
         el('div', { class: 'panel-h' }, el('h3', {}, 'Trainability decision'),
           el('span', { class: `chip ${r.can_train.status === 'possible' ? 'chip-green' : ''}` }, r.can_train.status.replaceAll('_', ' ')),
           el('span', { class: 'sp' }),
-          el('div', { class: 'readiness-controls' }, modalityControl, targetControl, recalculateReadiness)),
+          el('div', { class: 'readiness-controls' }, modalityControl, targetControl, labelColumnControl,
+            missingControl, splitControl, recalculateReadiness)),
         el('div', { class: 'panel-b readiness-decision' },
           el('div', { class: 'readiness-facts' },
             ...[
               ['Target', r.can_train.target || 'Unspecified'],
               ['Modality', r.can_train.modality || 'Any declared modality'],
               ['Split', r.can_train.suggested_split],
+              ['Split groups', `${fmt(r.can_train.split_group_count)} · ${r.can_train.split_status.replaceAll('_', ' ')}`],
               ['Subjects', fmt(r.can_train.n_subjects)],
               ['Recordings', fmt(r.can_train.n_recordings)],
               ['Label-ready', fmt(r.can_train.n_label_ready)],
               ['Required download', fmtBytes(r.can_train.required_download_bytes)],
               ['Label evidence', r.can_train.label_status],
+              ['Local data root', r.local_label_evidence?.data_root_present ? 'Present' : 'Absent'],
             ].map(([label, value]) => el('div', {}, el('span', { class: 'sub' }, label), el('b', {}, value)))),
           r.can_train.leakage_risks?.length
             ? el('div', { class: 'demographic-warning' }, el('b', {}, 'Leakage risks'), el('span', {}, r.can_train.leakage_risks.join('; ')))
@@ -2420,6 +2731,119 @@ async function tabGraph(body, profile) {
   const analysis = el('section', { class: 'panel signal-analysis-panel' });
   body.append(analysis);
   renderSignalAnalysis(analysis, signal, profile);
+  body.append(publicRoiConnectivityPanel());
+}
+
+function publicRoiConnectivityPanel() {
+  const section = el('section', { class: 'panel roi-connectivity-panel' });
+  const maxFrames = el('input', { class: 'input signal-number', type: 'number', min: '20', max: '168', step: '1', value: '168', 'aria-label': 'Public ROI maximum frames' });
+  const fdThreshold = el('input', { class: 'input signal-number', type: 'number', min: '0', step: '0.05', value: '0.5', 'aria-label': 'Public ROI FD threshold' });
+  const connThreshold = el('input', { class: 'input signal-number', type: 'number', min: '0.01', max: '0.99', step: '0.05', value: '0.3', 'aria-label': 'Public ROI connectivity threshold' });
+  const runButton = el('button', { class: 'btn btn-green' }, 'Run public MNI ROI validation');
+  const content = el('div', { class: 'panel-b' });
+  section.append(
+    el('div', { class: 'panel-h' }, el('h3', {}, 'Atlas ROI connectivity and browser'),
+      el('span', { class: 'sub' }, 'public normalized BOLD · Schaefer-100'), el('span', { class: 'sp' }),
+      el('div', { class: 'signal-controls' }, labeled('Frames', maxFrames), labeled('FD (mm)', fdThreshold), labeled('|r|', connThreshold), runButton)),
+    content);
+  content.append(
+    el('p', {}, 'This validation uses the public development-fMRI subject in MNI152NLin2009cAsym space and the public Schaefer 2018 100-parcel atlas.'),
+    el('p', { class: 'sub' }, 'Qortex verifies spatial reference, hashes BOLD/confounds/atlas inputs, applies real framewise-displacement censoring and confound regression, then persists the resampled label map, ROI statistics, connectivity matrix, montage, environment, and provenance. Raw native-space BOLD is not passed through an MNI atlas.'));
+
+  runButton.onclick = async () => {
+    runButton.disabled = true;
+    content.innerHTML = '';
+    const status = el('p', { class: 'sub' }, 'Fetching or verifying public data and atlas…');
+    const bar = el('div', { class: 'jprog' }, el('div', { style: 'width:0%' }));
+    content.append(status, bar);
+    try {
+      const accepted = await Api.startPublicRoiConnectivity({
+        max_frames: Number(maxFrames.value),
+        fd_threshold_mm: Number(fdThreshold.value),
+        connectivity_threshold: Number(connThreshold.value),
+      });
+      let job;
+      do {
+        await new Promise(resolve => setTimeout(resolve, 700));
+        job = await Api.job(accepted.job_id);
+        bar.firstChild.style.width = `${job.progress || 0}%`;
+        status.textContent = `Extracting and hashing ROI evidence · ${job.progress || 0}%`;
+        if (job.status === 'error') throw new Error(job.error || 'ROI-connectivity validation failed.');
+      } while (job.status !== 'done');
+      await renderPublicRoiConnectivityResult(content, job.result);
+    } catch (err) {
+      content.innerHTML = '';
+      content.append(errorPanel(err));
+    } finally {
+      runButton.disabled = false;
+    }
+  };
+  return section;
+}
+
+async function renderPublicRoiConnectivityResult(host, result) {
+  host.innerHTML = '';
+  const matrixText = await fetch(Api.publicRoiConnectivityArtifactUrl(result.run_id, 'connectivity')).then(response => {
+    if (!response.ok) throw new Error(`Connectivity artifact returned HTTP ${response.status}`);
+    return response.text();
+  });
+  const matrix = matrixText.trim().split('\n').map(row => row.split(',').map(Number));
+  if (matrix.length !== 100 || matrix.some(row => row.length !== 100 || row.some(value => !Number.isFinite(value)))) {
+    throw new Error('Persisted connectivity artifact is not a finite 100 by 100 matrix.');
+  }
+  const montage = el('img', {
+    class: 'model-detection-board', src: Api.publicRoiConnectivityArtifactUrl(result.run_id, 'montage'),
+    alt: 'Mean public MNI BOLD montage with Schaefer-100 parcel boundaries', loading: 'eager',
+  });
+  const viewerCanvas = el('canvas', { class: 'model-nifti-canvas', 'aria-label': 'Interactive public mean BOLD with Schaefer atlas overlay' });
+  const search = el('input', { class: 'input', type: 'search', placeholder: 'Filter ROI labels', 'aria-label': 'Filter ROI labels' });
+  const tableBody = el('tbody');
+  const roiRows = result.roi_statistics || [];
+  function renderRows() {
+    const needle = search.value.trim().toLocaleLowerCase();
+    const shown = roiRows.filter(row => !needle || row.label.toLocaleLowerCase().includes(needle)).slice(0, 100);
+    tableBody.innerHTML = '';
+    tableBody.append(...shown.map(row => el('tr', {},
+      el('td', { class: 'num mono' }, row.index), el('td', { class: 'mono' }, row.label),
+      el('td', { class: 'num' }, fmt(row.voxel_count)),
+      el('td', { class: 'mono' }, row.centroid_mni_mm?.map(value => value.toFixed(1)).join(', ') || 'Unavailable'),
+      el('td', { class: 'num' }, row.temporal_snr == null ? 'Unavailable' : row.temporal_snr.toFixed(3)))));
+  }
+  search.addEventListener('input', renderRows);
+  renderRows();
+  const links = el('div', { class: 'model-artifact-links' }, ...Object.entries(result.artifacts).map(([name]) => {
+    const evidence = result.artifact_inventory?.[name];
+    return el('a', {
+      class: 'btn btn-sm', href: Api.publicRoiConnectivityArtifactUrl(result.run_id, name), target: '_blank', rel: 'noreferrer',
+      title: evidence?.sha256 ? `SHA-256 ${evidence.sha256} · ${fmtBytes(evidence.size_bytes)}` : 'Provenance record',
+    }, name.replaceAll('_', ' '));
+  }));
+  host.append(
+    el('div', { class: 'model-metric-grid' },
+      ...[
+        ['ROIs', result.atlas.n_regions, result.atlas.id],
+        ['Frames', `${result.scrubbing.retained_count} retained`, `${result.scrubbing.flagged_count} FD-flagged`],
+        ['Edges', fmt(result.connectivity.n_nonzero_edges), `absolute |r| ≥ ${result.configuration.connectivity_threshold}`],
+        ['Density', result.graph.density.toFixed(4), `${result.graph.n_connected_components} component(s)`],
+        ['Modularity', result.graph.modularity?.toFixed(4) ?? 'Unavailable', result.graph.confidence],
+        ['Runtime', `${result.runtime.elapsed_seconds.toFixed(3)} s`, result.dataset.subject],
+      ].map(([label, value, note]) => el('div', { class: 'model-metric' }, el('span', { class: 'sub' }, label), el('b', {}, value), el('span', { class: 'sub' }, note)))),
+    el('div', { class: 'demographic-warning' }, el('b', {}, 'Validation scope'),
+      el('span', {}, 'One public subject validates the execution path; these graph values are not population estimates. Dataset use is unrestricted for non-commercial research. Atlas license is not stated by the Nilearn fetcher, so the source and reference are recorded without inventing a license.')),
+    el('div', { class: 'signal-grid connectivity-grid' },
+      panel('ROI connectivity matrix', result.graph.construction_summary, connectivityMatrix(matrix, result.atlas.labels)),
+      panel('Interactive atlas overlay', 'mean BOLD plus resampled integer labels', viewerCanvas)),
+    panel('Axial montage', 'real mean BOLD with parcel boundaries', montage),
+    panel('ROI inspector', `${fmt(roiRows.length)} parcels · MNI millimeter centroids`, el('div', {}, search,
+      el('div', { class: 'tblw validation-table' }, el('table', { class: 't' },
+        el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, 'ROI'), el('th', {}, 'Voxels'), el('th', {}, 'Centroid x, y, z'), el('th', {}, 'tSNR'))), tableBody)))),
+    links);
+  await attachNiftiOverlayViewer(
+    viewerCanvas,
+    Api.publicRoiConnectivityArtifactUrl(result.run_id, 'mean_volume'),
+    Api.publicRoiConnectivityArtifactUrl(result.run_id, 'atlas_labels'),
+    'red', 0.42,
+  );
 }
 
 function renderSignalAnalysis(section, payload, profile) {
@@ -3284,11 +3708,13 @@ function renderCohortComparison(report) {
           summary ? `${summary.mean.toFixed(3)} ± ${summary.std?.toFixed(3) ?? '—'}` : '—',
           summary ? `${summary.median.toFixed(3)} [${summary.q1.toFixed(3)}, ${summary.q3.toFixed(3)}]` : '—'];
       }
-      return [name, group.total_rows, group.total_rows - group.missing, group.missing, 0,
+      return [name, group.total_rows, group.total_rows - group.missing - (group.invalid?.length || 0), group.missing, group.invalid?.length || 0,
         Object.entries(group.counts).map(([category, count]) => `${category}: ${count}`).join(' · '), '—'];
     });
     const primary = variable.primary_test;
     const effect = primary.effect_size || {};
+    const invalidEntries = Object.entries(variable.groups).flatMap(([dataset, group]) =>
+      (group.invalid || []).map(item => `${dataset} row ${item.row}: ${JSON.stringify(item.value)}`));
     const metricCards = el('div', { class: 'model-metric-grid' },
       el('div', { class: 'model-metric' }, el('span', { class: 'sub' }, 'Raw p'), el('b', { class: 'mono' }, Number(primary.p_value_raw).toPrecision(4)), el('span', { class: 'sub' }, primary.method)),
       el('div', { class: 'model-metric' }, el('span', { class: 'sub' }, 'BH-adjusted p'), el('b', { class: 'mono' }, Number(primary.p_value_bh).toPrecision(4)), el('span', { class: 'sub' }, primary.reject_at_alpha ? `below α=${report.alpha}` : `not below α=${report.alpha}`)),
@@ -3303,6 +3729,9 @@ function renderCohortComparison(report) {
         el('tbody', {}, ...Object.keys(variable.groups).map((name, index) => el('tr', {}, el('td', {}, name), ...variable.contingency_table[index].map(value => el('td', { class: 'num' }, value)))))));
     wrap.append(panel(variable.column, `${variable.kind} · ${primary.method}`, el('div', {},
       metricCards,
+      variable.category_validation ? el('p', { class: 'sub' }, variable.category_validation) : null,
+      invalidEntries.length ? el('div', { class: 'demographic-warning' },
+        el('b', {}, `${invalidEntries.length} invalid value(s) excluded`), el('span', {}, invalidEntries.join('; '))) : null,
       tinyTable(['Dataset', 'Rows', 'Analyzed', 'Missing', 'Invalid', variable.kind === 'numeric' ? 'Mean ± SD' : 'Counts', 'Median [IQR]'], groupRows),
       estimate)));
   }
@@ -3656,6 +4085,10 @@ async function renderPublicBratsResult(host, result) {
 }
 
 async function attachBratsResultViewer(canvas, baseUrl, overlayUrl) {
+  return attachNiftiOverlayViewer(canvas, baseUrl, overlayUrl, 'red', 0.55);
+}
+
+async function attachNiftiOverlayViewer(canvas, baseUrl, overlayUrl, colormap = 'red', opacity = 0.55) {
   const nv = new Niivue({
     isResizeCanvas: true,
     show3Dcrosshair: true,
@@ -3669,7 +4102,7 @@ async function attachBratsResultViewer(canvas, baseUrl, overlayUrl) {
   });
   await nv.attachToCanvas(canvas);
   const base = await NVImage.loadFromUrl({ url: baseUrl, colormap: 'gray' });
-  const overlay = await NVImage.loadFromUrl({ url: overlayUrl, colormap: 'red', opacity: 0.55 });
+  const overlay = await NVImage.loadFromUrl({ url: overlayUrl, colormap, opacity });
   nv.addVolume(base); nv.addVolume(overlay); nv.drawScene();
 }
 
@@ -3816,7 +4249,11 @@ function renderPersistentRuns(inventory) {
         ? Api.conversionArtifactUrl(run.dataset.id, run.dataset.snapshot, run.run_id, file.name)
         : run.kind === 'pretrained_detection_validation'
           ? Api.publicDetectionArtifactUrl(run.run_id, file.name)
-          : Api.publicBratsArtifactUrl(run.run_id, file.name);
+          : run.kind === 'public_roi_connectivity_validation'
+            ? Api.publicRoiConnectivityArtifactUrl(run.run_id, file.name)
+          : run.kind === 'fmri_qc'
+            ? Api.fmriQcArtifactUrl(run.run_id, file.name)
+            : Api.publicBratsArtifactUrl(run.run_id, file.name);
       return el('a', { class: 'btn btn-sm', href, target: '_blank', rel: 'noreferrer', title: file.sha256 || 'No persisted artifact hash for this older run' },
         `${file.name} · ${fmtBytes(file.size_bytes)}`);
     });
