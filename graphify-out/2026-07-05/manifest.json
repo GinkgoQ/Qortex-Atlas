@@ -1,0 +1,67 @@
+{
+  ".claude/settings.json": {
+    "mtime": 1783232889.9029443,
+    "ast_hash": "e51077b6a7f1f67afc748f1a32a1557d",
+    "semantic_hash": ""
+  },
+  "app/js/api.js": {
+    "mtime": 1783240106.6151862,
+    "ast_hash": "1090f9a75e1300f646cedb737598831f",
+    "semantic_hash": ""
+  },
+  "app/js/app.js": {
+    "mtime": 1783244655.071294,
+    "ast_hash": "560141e8d297940593c03a1faaf000cb",
+    "semantic_hash": ""
+  },
+  "app/js/vendor/niivue.esm.js": {
+    "mtime": 1783151380.2730155,
+    "ast_hash": "6207f9e3d596f381f8fb3645f557902e",
+    "semantic_hash": ""
+  },
+  "AGENTS.md": {
+    "mtime": 1783233297.8926315,
+    "ast_hash": "36fed6cf098d60bc8ea224ac65d5c920",
+    "semantic_hash": ""
+  },
+  "CLAUDE.md": {
+    "mtime": 1783232889.9029443,
+    "ast_hash": "82efb97a359f5c7290bf2513d14686be",
+    "semantic_hash": ""
+  },
+  "app/README.md": {
+    "mtime": 1783030266.0285783,
+    "ast_hash": "dd48f28c471ccd3b0fedc45294a8a0da",
+    "semantic_hash": ""
+  },
+  "app/index.html": {
+    "mtime": 1783240830.054239,
+    "ast_hash": "82b969acb128e757dcec8483263448cb",
+    "semantic_hash": ""
+  },
+  "qortex-atlas-deep-intelligence.md": {
+    "mtime": 1783103395.974915,
+    "ast_hash": "2a733d249aabbd3ee208c9c6db4aec10",
+    "semantic_hash": ""
+  },
+  "qortex-atlas-product-plan.md": {
+    "mtime": 1782986616.6484358,
+    "ast_hash": "216741a3b7a1944ae4e85bb4b35cc6bb",
+    "semantic_hash": ""
+  },
+  "qortex-atlas-search-engine.md": {
+    "mtime": 1783095953.1704876,
+    "ast_hash": "22640bc97b95dd7ec4b421fc828f9017",
+    "semantic_hash": ""
+  },
+  "qortex-atlas-ui-plan.md": {
+    "mtime": 1782986893.1594265,
+    "ast_hash": "2b96b6994ecb860b3fae03c4c46581a1",
+    "semantic_hash": ""
+  },
+  "qortex-atlas.md": {
+    "mtime": 1782722499.1007001,
+    "ast_hash": "a8d36e2d690ddc13fddcc75d648e5920",
+    "semantic_hash": ""
+  }
+}
