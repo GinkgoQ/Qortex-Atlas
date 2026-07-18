@@ -135,6 +135,7 @@ export const Api = {
   publicDetectionRun: (id) => req(`/models/detection/runs/${encodeURIComponent(id)}`),
   publicDetectionArtifactUrl: (id, artifact) => `${BASE}/models/detection/runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifact)}`,
   cohortCompose: (body) => req('/cohort/compose', { method: 'POST', body: JSON.stringify(body) }),
+  cohortCompareParticipants: (body) => req('/cohort/compare-participants', { method: 'POST', body: JSON.stringify(body) }),
 
   persistentRuns: (limit = 100) => req(`/runs/persistent${qs({ limit })}`),
   jobs: () => req('/jobs'),

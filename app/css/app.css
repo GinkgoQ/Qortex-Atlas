@@ -1125,6 +1125,10 @@ a.ws-crumb:hover { color: var(--ws-t2); }
 .model-cache-list { display: grid; gap: 7px; max-height: 260px; overflow: auto; }
 .model-cache-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
 .model-cache-entry .mono { overflow-wrap: anywhere; }
+.cohort-variable-editor { display: grid; gap: 8px; }
+.cohort-variable-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(150px, .45fr) auto; gap: 8px; align-items: end; }
+.cohort-comparison-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.cohort-comparison-report { display: grid; gap: 12px; }
 .readiness-decision { display: grid; gap: 14px; }
 .readiness-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 9px; }
 .readiness-facts > div { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
@@ -1192,4 +1196,5 @@ a.ws-crumb:hover { color: var(--ws-t2); }
 @media (max-width: 760px) {
   .model-metric-grid, .model-result-viewers { grid-template-columns: 1fr; }
   .model-result-canvas { height: 310px; }
+  .cohort-variable-row { grid-template-columns: 1fr; }
 }

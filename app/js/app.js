@@ -12,7 +12,7 @@
    real remote-preview capability exists (DWI tractography), the UI says so
    plainly instead of fabricating one — evidence-first, never a guess. */
 
-import { Api } from './api.js?v=52';
+import { Api } from './api.js?v=53';
 import { Niivue, NVImage, SHOW_RENDER, MULTIPLANAR_TYPE } from './vendor/niivue.esm.js';
 
 /* ================= tiny dom (v2, unchanged) ================= */
@@ -3173,6 +3173,22 @@ async function viewCompose() {
   const addInput = el('input', { type: 'text', placeholder: 'Add dataset ID (e.g. ds000117)', style: 'flex:1' });
   const modInput = el('input', { type: 'text', placeholder: 'e.g. eeg (optional)' });
   const resultWrap = el('div', { style: 'margin-top:14px' });
+  const comparisonResult = el('div', { style: 'margin-top:12px' });
+  const variableEditor = el('div', { class: 'cohort-variable-editor' });
+  const alphaInput = el('input', { type: 'number', min: '0.001', max: '0.25', step: '0.001', value: '0.05', style: 'width:90px' });
+
+  function addVariable(column = '', kind = 'numeric') {
+    const columnInput = el('input', { type: 'text', value: column, placeholder: 'participants.tsv column' });
+    const kindInput = el('select', {},
+      el('option', { value: 'numeric', selected: kind === 'numeric' }, 'Numeric'),
+      el('option', { value: 'categorical', selected: kind === 'categorical' }, 'Categorical'));
+    const row = el('div', { class: 'cohort-variable-row' },
+      labeled('Column', columnInput), labeled('Declared type', kindInput),
+      el('button', { class: 'btn btn-sm', onclick: () => row.remove(), title: 'Remove comparison variable' }, 'Remove'));
+    row.variableValue = () => ({ column: columnInput.value.trim(), kind: kindInput.value });
+    variableEditor.append(row);
+  }
+  addVariable('age', 'numeric');
 
   function renderChips() {
     chips.innerHTML = '';
@@ -3185,7 +3201,42 @@ async function viewCompose() {
     el('div', { style: 'display:flex;gap:8px;margin-top:10px' }, addInput,
       el('button', { class: 'btn btn-sm', onclick: () => { const v = addInput.value.trim(); if (v) { selected.add(v); addInput.value = ''; renderChips(); compute(); } } }, 'Add')))));
   wrap.append(panel('Requirements', null, labeled('Require modality', modInput)));
+  wrap.append(panel('Participant comparison', 'explicit variable semantics · no inferred group labels', el('div', {},
+    variableEditor,
+    el('div', { class: 'cohort-comparison-actions' },
+      el('button', { class: 'btn btn-sm', onclick: () => addVariable('', 'numeric') }, 'Add variable'),
+      labeled('Alpha', alphaInput, true),
+      el('button', { class: 'btn btn-green', onclick: runComparison }, 'Compare two datasets')),
+    el('p', { class: 'sub' }, 'Groups are dataset membership. Numeric variables use Welch inference plus Mann-Whitney sensitivity; categorical variables use Fisher exact for 2×2 tables or Pearson chi-square. Primary p-values are Benjamini-Hochberg adjusted.'),
+    comparisonResult)));
   wrap.append(resultWrap);
+
+  async function runComparison() {
+    comparisonResult.innerHTML = '';
+    if (selected.size !== 2) {
+      comparisonResult.append(errorPanel(new Error('Participant comparison requires exactly two selected datasets.')));
+      return;
+    }
+    const variables = [...variableEditor.querySelectorAll('.cohort-variable-row')]
+      .map(row => row.variableValue()).filter(item => item.column);
+    if (!variables.length) {
+      comparisonResult.append(errorPanel(new Error('Declare at least one participant variable.')));
+      return;
+    }
+    comparisonResult.append(waitPanel('Fetching real participant tables and computing the declared comparison.', {
+      height: 180, eta: { operation: 'cohort-participant-comparison', key: `${[...selected].join(':')}:${JSON.stringify(variables)}` },
+    }));
+    try {
+      const report = await Api.cohortCompareParticipants({
+        dataset_ids: [...selected], variables, alpha: Number(alphaInput.value),
+      });
+      comparisonResult.innerHTML = '';
+      comparisonResult.append(renderCohortComparison(report));
+    } catch (err) {
+      comparisonResult.innerHTML = '';
+      comparisonResult.append(errorPanel(err));
+    }
+  }
 
   async function compute() {
     resultWrap.innerHTML = '';
@@ -3208,6 +3259,57 @@ async function viewCompose() {
   }
   main.append(wrap);
   modInput.addEventListener('change', compute);
+}
+
+function renderCohortComparison(report) {
+  const wrap = el('div', { class: 'cohort-comparison-report' },
+    el('div', { class: 'demographic-warning' },
+      el('b', {}, 'Interpretation boundary'), el('span', {}, report.group_definition.warning)),
+    el('dl', { class: 'kv' },
+      el('dt', {}, 'Direction'), el('dd', { class: 'mono' }, report.group_definition.direction),
+      el('dt', {}, 'Missingness'), el('dd', {}, report.missingness_policy),
+      el('dt', {}, 'Tests'), el('dd', {}, report.test_policy),
+      el('dt', {}, 'Multiplicity'), el('dd', {}, report.multiplicity_policy),
+      el('dt', {}, 'Alpha'), el('dd', { class: 'mono' }, report.alpha)));
+  for (const variable of report.variables || []) {
+    if (variable.status !== 'completed') {
+      wrap.append(panel(variable.column, variable.kind, el('div', { class: 'demographic-warning' },
+        el('b', {}, variable.status.replaceAll('_', ' ')), el('span', {}, variable.reason))));
+      continue;
+    }
+    const groupRows = Object.entries(variable.groups).map(([name, group]) => {
+      if (variable.kind === 'numeric') {
+        const summary = group.summary;
+        return [name, group.total_rows, summary?.n ?? 0, group.missing, group.invalid?.length || 0,
+          summary ? `${summary.mean.toFixed(3)} ± ${summary.std?.toFixed(3) ?? '—'}` : '—',
+          summary ? `${summary.median.toFixed(3)} [${summary.q1.toFixed(3)}, ${summary.q3.toFixed(3)}]` : '—'];
+      }
+      return [name, group.total_rows, group.total_rows - group.missing, group.missing, 0,
+        Object.entries(group.counts).map(([category, count]) => `${category}: ${count}`).join(' · '), '—'];
+    });
+    const primary = variable.primary_test;
+    const effect = primary.effect_size || {};
+    const metricCards = el('div', { class: 'model-metric-grid' },
+      el('div', { class: 'model-metric' }, el('span', { class: 'sub' }, 'Raw p'), el('b', { class: 'mono' }, Number(primary.p_value_raw).toPrecision(4)), el('span', { class: 'sub' }, primary.method)),
+      el('div', { class: 'model-metric' }, el('span', { class: 'sub' }, 'BH-adjusted p'), el('b', { class: 'mono' }, Number(primary.p_value_bh).toPrecision(4)), el('span', { class: 'sub' }, primary.reject_at_alpha ? `below α=${report.alpha}` : `not below α=${report.alpha}`)),
+      el('div', { class: 'model-metric' }, el('span', { class: 'sub' }, effect.name || 'Effect size'), el('b', { class: 'mono' }, effect.value == null ? '—' : Number(effect.value).toFixed(4)), el('span', { class: 'sub' }, effect.direction || 'association magnitude')));
+    const estimate = variable.kind === 'numeric' ? el('dl', { class: 'kv' },
+      el('dt', {}, 'Estimand'), el('dd', {}, variable.estimand),
+      el('dt', {}, 'Mean difference'), el('dd', { class: 'mono' }, Number(primary.mean_difference).toFixed(4)),
+      el('dt', {}, `${Math.round(primary.confidence_level * 100)}% CI`), el('dd', { class: 'mono' }, primary.confidence_interval.map(value => Number(value).toFixed(4)).join(' to ')),
+      el('dt', {}, 'Sensitivity'), el('dd', {}, `${variable.sensitivity_test.method}: p=${Number(variable.sensitivity_test.p_value_raw).toPrecision(4)}; ${variable.sensitivity_test.effect_size.name}=${Number(variable.sensitivity_test.effect_size.value).toFixed(4)}`))
+      : el('div', { class: 'tblw' }, el('table', { class: 't' },
+        el('thead', {}, el('tr', {}, el('th', {}, 'Cohort'), ...variable.categories.map(category => el('th', {}, category)))),
+        el('tbody', {}, ...Object.keys(variable.groups).map((name, index) => el('tr', {}, el('td', {}, name), ...variable.contingency_table[index].map(value => el('td', { class: 'num' }, value)))))));
+    wrap.append(panel(variable.column, `${variable.kind} · ${primary.method}`, el('div', {},
+      metricCards,
+      tinyTable(['Dataset', 'Rows', 'Analyzed', 'Missing', 'Invalid', variable.kind === 'numeric' ? 'Mean ± SD' : 'Counts', 'Median [IQR]'], groupRows),
+      estimate)));
+  }
+  wrap.append(panel('Sources', 'immutable OpenNeuro snapshot participant tables', tinyTable(
+    ['Dataset', 'Snapshot', 'Rows', 'Path', 'MD5'],
+    (report.sources || []).map(source => [source.dataset_id, source.snapshot, source.rows, source.path, source.checksum_md5 || 'Not published']))));
+  return wrap;
 }
 
 /* ---------- Compatibility (v1 capability, global model×dataset) ---------- */

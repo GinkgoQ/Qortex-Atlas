@@ -24,7 +24,7 @@ No model training, mock responses, fabricated datasets, placeholder metrics, or 
 - [x] Audit Qortex implementation depth and API exposure for each requirement.
 - [x] Audit Atlas implementation depth and real-data binding for each requirement.
 - [x] Record an evidence-backed implementation matrix.
-- [ ] Implement missing or shallow Qortex domain/API functionality. Completed slices: model zoo/public segmentation and object-detection inference, readiness, demographics, coverage, validation, fMRI QC, signal analysis/connectivity/features, cache inventory, conversion/export.
+- [ ] Implement missing or shallow Qortex domain/API functionality. Completed slices: model zoo/typed execution profiles/public segmentation and object-detection inference/recoverable model-cache controls, readiness, demographics, coverage, validation, fMRI QC, signal analysis/connectivity/features, cache inventory, conversion/export.
 - [ ] Connect Atlas workflows to Qortex endpoints and mature UI-only interactions. The same completed slices are connected; remaining partial panels stay tracked in `IMPLEMENTATION_AUDIT.md`.
 - [x] Run focused unit, integration, browser, public-dataset, and public-model checks for every landed slice. Aggregate focused suite: 117 passed before the detection slice; detection/model-catalog focus: 26 passed. Live ds000001/ds000117, MONAI/BraTS, Faster R-CNN/COCO, conversion, validator, telemetry, and Chrome workflows verified.
 - [x] Re-index both repositories and inspect cross-boundary impact. Moderate indexes: Qortex 9,170 nodes/49,633 edges; Atlas 1,432 nodes/2,105 edges. Dynamic API URLs produced no automatic cross-repo edges.
