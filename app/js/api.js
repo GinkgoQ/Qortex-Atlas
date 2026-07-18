@@ -120,9 +120,20 @@ export const Api = {
 
   models: () => req('/models'),
   modelStatus: () => req('/models/status'),
+  modelExecutionProfiles: () => req('/models/execution-profiles'),
+  executeModelProfile: (profileId, parameters = {}) => req('/models/execute-public', {
+    method: 'POST', body: JSON.stringify({ profile_id: profileId, parameters }),
+  }),
+  modelCacheInventory: () => req('/models/cache'),
+  removeModelCache: (id, confirmationSha256) => req(`/models/cache/${encodeURIComponent(id)}`, {
+    method: 'DELETE', body: JSON.stringify({ confirmation_sha256: confirmationSha256 }),
+  }),
   validatePublicBrats: (body = {}) => req('/models/brats/validate-public', { method: 'POST', body: JSON.stringify(body) }),
   publicBratsRun: (id) => req(`/models/brats/runs/${encodeURIComponent(id)}`),
   publicBratsArtifactUrl: (id, artifact) => `${BASE}/models/brats/runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifact)}`,
+  validatePublicDetection: (body = {}) => req('/models/detection/validate-public', { method: 'POST', body: JSON.stringify(body) }),
+  publicDetectionRun: (id) => req(`/models/detection/runs/${encodeURIComponent(id)}`),
+  publicDetectionArtifactUrl: (id, artifact) => `${BASE}/models/detection/runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifact)}`,
   cohortCompose: (body) => req('/cohort/compose', { method: 'POST', body: JSON.stringify(body) }),
 
   persistentRuns: (limit = 100) => req(`/runs/persistent${qs({ limit })}`),

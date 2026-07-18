@@ -12,7 +12,7 @@
    real remote-preview capability exists (DWI tractography), the UI says so
    plainly instead of fabricating one — evidence-first, never a guess. */
 
-import { Api } from './api.js?v=49';
+import { Api } from './api.js?v=52';
 import { Niivue, NVImage, SHOW_RENDER, MULTIPLANAR_TYPE } from './vendor/niivue.esm.js';
 
 /* ================= tiny dom (v2, unchanged) ================= */
@@ -3000,6 +3000,8 @@ function renderSearchResponse(container, data) {
   if (!results.length && !(live && live.length)) {
     container.append(el('p', { class: 'sub' }, 'No matches — try relaxing a filter, or enable "Include live OpenNeuro".'));
   } else if (results.length) {
+    container.append(el('div', { class: 'model-artifact-links', style: 'margin-bottom:10px' },
+      el('button', { class: 'btn btn-sm', onclick: () => exportSearchResultsCsv(results, plan) }, `Export ${fmt(results.length)} ranked results as CSV`)));
     container.append(paginatedResultsTable(results));
   }
 
@@ -3019,6 +3021,28 @@ function renderSearchResponse(container, data) {
     );
     container.append(panelWrap('Also on OpenNeuro (live — not ranked by the local engine)', el('div', { class: 'tblw' }, table)));
   }
+}
+
+function exportSearchResultsCsv(results, plan) {
+  const quote = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
+  const header = ['rank', 'dataset_id', 'name', 'score', 'subjects', 'size_bytes', 'modalities', 'retrievers', 'evidence', 'compiled_query_plan'];
+  const lines = [header.map(quote).join(',')];
+  results.forEach((result, index) => lines.push([
+    index + 1,
+    result.dataset_id,
+    result.row?.name,
+    result.fused_score,
+    result.row?.n_subjects,
+    result.row?.total_bytes,
+    (result.row?.modalities || []).join('|'),
+    (result.matched_by || []).join('|'),
+    JSON.stringify(result.evidence_flags || {}),
+    JSON.stringify(plan || {}),
+  ].map(quote).join(',')));
+  const href = URL.createObjectURL(new Blob([`${lines.join('\n')}\n`], { type: 'text/csv;charset=utf-8' }));
+  const anchor = el('a', { href, download: `qortex-search-${new Date().toISOString().slice(0, 10)}.csv` });
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(href), 0);
 }
 
 // Ranked results are fused server-side into one ordered list; paging is a
@@ -3235,7 +3259,9 @@ async function viewModels() {
   const body = el('div', {}, skeletonPanel(260));
   wrap.append(body); main.append(wrap);
   try {
-    const [models, status] = await Promise.all([Api.models(), Api.modelStatus()]);
+    const [models, status, cacheControl] = await Promise.all([
+      Api.models(), Api.modelStatus(), Api.modelCacheInventory(),
+    ]);
     const backendRows = Object.entries(status.backends || {}).map(([name, result]) =>
       el('div', { class: 'model-backend', title: result.error || `${result.module} imports successfully` },
         el('span', { class: `status-dot ${result.available ? 'status-good' : 'status-bad'}` }),
@@ -3251,6 +3277,11 @@ async function viewModels() {
     unique('modality').forEach(value => modality.append(el('option', { value }, value)));
     unique('task').forEach(value => task.append(el('option', { value }, value)));
     const count = el('span', { class: 'sub' });
+    const cacheWorkspace = renderModelCacheWorkspace(status.cache, cacheControl, modelId => {
+      const model = models.find(item => item.id === modelId);
+      if (model) { model.cached = false; model.cache = null; }
+      render();
+    });
     const validationBody = el('div', { class: 'model-validation-body' });
     const deviceSelect = el('select', { 'aria-label': 'Inference device' },
       el('option', { value: 'auto' }, 'Auto device'),
@@ -3261,6 +3292,26 @@ async function viewModels() {
     validationBody.append(validationControls, el('p', { class: 'sub' },
       'Pinned MONAI BraTS bundle · pinned public BraTS 2023 case · exact bundle preprocessing · ground-truth Dice · no training or generated inputs.'));
 
+    const detectionBody = el('div', { class: 'model-validation-body' });
+    const detectionDevice = el('select', { 'aria-label': 'Object detection inference device' },
+      el('option', { value: 'auto' }, 'Auto device'),
+      el('option', { value: 'cuda' }, 'CUDA'),
+      el('option', { value: 'cpu' }, 'CPU'));
+    const scoreThreshold = el('input', {
+      type: 'number', min: '0.05', max: '0.95', step: '0.05', value: '0.5',
+      'aria-label': 'Detection score threshold', title: 'Detection score threshold', style: 'width:95px',
+    });
+    const iouThreshold = el('input', {
+      type: 'number', min: '0.1', max: '1', step: '0.05', value: '0.5',
+      'aria-label': 'Ground-truth IoU threshold', title: 'Ground-truth IoU threshold', style: 'width:95px',
+    });
+    const detectionButton = el('button', { class: 'btn btn-green' }, 'Run public detection validation');
+    detectionBody.append(
+      el('div', { class: 'model-validation-controls' },
+        detectionDevice, labeled('Score', scoreThreshold), labeled('Match IoU', iouThreshold), detectionButton),
+      el('p', { class: 'sub' },
+        'Pinned Torchvision Faster R-CNN weights · pinned COCO 2017 validation image and annotations · exact weights preprocessing · measured one-image precision, recall, and matched IoU · no training.'));
+
     validationButton.onclick = async () => {
       validationButton.disabled = true;
       deviceSelect.disabled = true;
@@ -3270,7 +3321,9 @@ async function viewModels() {
       const bar = el('div', { class: 'jprog' }, el('div', { style: 'width:0%' }));
       resultHost.append(statusText, bar); validationBody.append(resultHost);
       try {
-        const { job_id } = await Api.validatePublicBrats({ device: deviceSelect.value });
+        const { job_id } = await Api.executeModelProfile('public-brats-segmentation-v1', {
+          device: deviceSelect.value,
+        });
         const completed = await new Promise((resolve, reject) => {
           const iv = setInterval(async () => {
             try {
@@ -3293,6 +3346,39 @@ async function viewModels() {
         deviceSelect.disabled = false;
       }
     };
+    detectionButton.onclick = async () => {
+      const controls = [detectionButton, detectionDevice, scoreThreshold, iouThreshold];
+      controls.forEach(control => { control.disabled = true; });
+      detectionBody.querySelector('.model-validation-result')?.remove();
+      const resultHost = el('div', { class: 'model-validation-result' });
+      const statusText = el('div', { class: 'sub' }, 'Submitting object detection validation job…');
+      const bar = el('div', { class: 'jprog' }, el('div', { style: 'width:0%' }));
+      resultHost.append(statusText, bar); detectionBody.append(resultHost);
+      try {
+        const { job_id } = await Api.executeModelProfile('public-coco-detection-v1', {
+          device: detectionDevice.value,
+          score_threshold: Number(scoreThreshold.value),
+          iou_threshold: Number(iouThreshold.value),
+        });
+        const completed = await new Promise((resolve, reject) => {
+          const iv = setInterval(async () => {
+            try {
+              const job = await Api.job(job_id);
+              bar.firstChild.style.width = `${job.progress || 0}%`;
+              statusText.textContent = `Verifying COCO artifacts and running pretrained detection · ${job.progress || 0}%`;
+              if (job.status === 'done') { clearInterval(iv); resolve(job.result); }
+              else if (job.status === 'error') { clearInterval(iv); reject(new Error(job.error || 'Detection validation failed.')); }
+            } catch (err) { clearInterval(iv); reject(err); }
+          }, 1000);
+        });
+        renderPublicDetectionResult(resultHost, completed);
+      } catch (err) {
+        resultHost.innerHTML = '';
+        resultHost.append(errorPanel(err));
+      } finally {
+        controls.forEach(control => { control.disabled = false; });
+      }
+    };
     const tableBody = el('tbody');
     const table = el('div', { class: 'tblw model-table' }, el('table', { class: 't' },
       el('thead', {}, el('tr', {},
@@ -3310,7 +3396,11 @@ async function viewModels() {
           ? `${model.runtime_status}; ${model.executable} ${model.executable_available ? 'found' : 'not found'}`
           : model.runtime_status;
         tableBody.append(el('tr', {},
-          el('td', {}, el('a', { href: model.source_url, target: '_blank', rel: 'noreferrer' }, model.display_name), el('div', { class: 'sub mono' }, model.id)),
+          el('td', {}, el('a', { href: model.source_url, target: '_blank', rel: 'noreferrer' }, model.display_name),
+            el('div', { class: 'sub mono' }, model.id),
+            ...(model.execution_profiles || []).map(profile => el('span', {
+              class: 'chip chip-green', title: `${profile.result_contract} · ${profile.dataset.id}`,
+            }, 'Executable profile'))),
           el('td', {}, model.provider),
           el('td', {}, model.modality.join(', ') || '—'),
           el('td', {}, model.task.join(', ') || '—'),
@@ -3324,16 +3414,98 @@ async function viewModels() {
     body.append(
       el('div', { class: 'model-summary-grid' },
         panel('Runtime backends', 'live import probes', el('div', { class: 'model-backends' }, ...backendRows)),
-        panel('Model cache', 'persisted manifest only', el('dl', { class: 'kv' },
-          el('dt', {}, 'Path'), el('dd', { class: 'mono' }, status.cache?.path || '—'),
-          el('dt', {}, 'Entries'), el('dd', {}, fmt(status.cache?.entries)),
-          el('dt', {}, 'Recorded size'), el('dd', {}, fmtBytes(status.cache?.size_bytes)),
-          el('dt', {}, 'Offline models'), el('dd', {}, fmt(status.offline_available_models?.length))))),
+        panel('Model cache', 'owner-aware · recoverable removal', cacheWorkspace)),
       panel('Pretrained public validation', 'real model · real data · measured output', validationBody),
+      panel('Public object detection validation', 'artifact-backed COCO evaluation', detectionBody),
       panel('Registered models and engines', null, el('div', {},
         el('div', { class: 'model-filters' }, provider, modality, task, count), table)));
     render();
   } catch (err) { body.innerHTML = ''; body.append(errorPanel(err)); }
+}
+
+function renderModelCacheWorkspace(summary, inventory, onRemoved) {
+  const wrap = el('div', { class: 'model-cache-workspace' });
+  const summaryList = el('dl', { class: 'kv' },
+    el('dt', {}, 'Manifest'), el('dd', { class: 'mono' }, summary?.path || '—'),
+    el('dt', {}, 'Entries'), el('dd', {}, fmt(summary?.entries)),
+    el('dt', {}, 'Recorded size'), el('dd', {}, fmtBytes(summary?.size_bytes)),
+    el('dt', {}, 'Trash'), el('dd', { class: 'mono' }, inventory.trash_root));
+  wrap.append(summaryList, el('p', { class: 'sub' }, inventory.policy));
+  const list = el('div', { class: 'model-cache-list' });
+  for (const entry of inventory.entries || []) {
+    const action = el('button', {
+      class: 'btn btn-sm', disabled: !entry.removable,
+      title: entry.removable
+        ? `Integrity will be rechecked against SHA-256 ${entry.sha256}`
+        : `Removal blocked: owner ${entry.storage_owner}; shared with ${entry.shared_with.join(', ') || 'none'}; exists ${entry.exists}`,
+    }, entry.removable ? 'Move to trash' : 'Removal blocked');
+    const row = el('div', { class: 'model-cache-entry' },
+      el('div', {}, el('b', {}, entry.model_id), el('div', { class: 'sub mono' }, entry.path),
+        el('div', { class: 'sub' }, `${entry.storage_owner} · ${entry.target_type} · ${fmtBytes(entry.recorded_size_bytes)}`)),
+      action);
+    action.onclick = async () => {
+      const confirmed = window.confirm(
+        `Move ${entry.model_id} to Qortex trash?\n\nThe recorded artifact will be hash-verified and remain recoverable. No run artifacts or datasets will be removed.`);
+      if (!confirmed) return;
+      action.disabled = true;
+      action.textContent = 'Verifying…';
+      try {
+        const receipt = await Api.removeModelCache(entry.model_id, entry.sha256);
+        row.replaceChildren(
+          el('div', {}, el('b', {}, `${entry.model_id} moved to trash`),
+            el('div', { class: 'sub mono' }, receipt.trash_path),
+            el('div', { class: 'sub' }, `Verified ${receipt.verified_sha256} · recovery receipt persisted`)));
+        onRemoved(entry.model_id);
+      } catch (err) {
+        action.disabled = false;
+        action.textContent = 'Move to trash';
+        row.append(errorPanel(err));
+      }
+    };
+    list.append(row);
+  }
+  wrap.append(list);
+  return wrap;
+}
+
+function renderPublicDetectionResult(host, result) {
+  host.innerHTML = '';
+  const metrics = result.metrics || {};
+  const metricCards = el('div', { class: 'model-metric-grid' },
+    ...[
+      ['Precision', metrics.precision, `${fmt(metrics.true_positives)} TP · ${fmt(metrics.false_positives)} FP`],
+      ['Recall', metrics.recall, `${fmt(metrics.true_positives)} TP · ${fmt(metrics.false_negatives)} FN`],
+      ['Mean matched IoU', metrics.mean_matched_iou, `${fmt(metrics.evaluated_predictions)} predictions · ${fmt(metrics.ground_truth_objects)} targets`],
+    ].map(([name, value, detail]) => el('div', { class: 'model-metric' },
+      el('span', { class: 'sub' }, name),
+      el('b', { class: 'mono' }, value == null ? '—' : Number(value).toFixed(4)),
+      el('span', { class: 'sub mono' }, detail))));
+  const provenance = el('dl', { class: 'kv model-run-provenance' },
+    el('dt', {}, 'Image'), el('dd', { class: 'mono' }, `${result.dataset.id}/${result.dataset.split}/${result.dataset.image_id}`),
+    el('dt', {}, 'Image SHA-256'), el('dd', { class: 'mono' }, result.input.sha256),
+    el('dt', {}, 'Annotations SHA-256'), el('dd', { class: 'mono' }, result.dataset.annotation_archive_sha256),
+    el('dt', {}, 'Weights'), el('dd', { class: 'mono' }, `${result.model.weights} · ${result.model.checkpoint_sha256}`),
+    el('dt', {}, 'Device / precision'), el('dd', {}, `${result.runtime.device} · ${result.runtime.precision}`),
+    el('dt', {}, 'Preprocessing'), el('dd', { class: 'mono' }, result.runtime.preprocessing),
+    el('dt', {}, 'Inference'), el('dd', {}, `${Number(result.runtime.inference_seconds).toFixed(3)} s`),
+    el('dt', {}, 'Peak CUDA allocated'), el('dd', {}, result.runtime.peak_memory?.allocated_bytes != null ? fmtBytes(result.runtime.peak_memory.allocated_bytes) : 'Not measured'),
+    el('dt', {}, 'Image license'), el('dd', {}, result.dataset.image_license?.name || 'Recorded in COCO metadata'),
+    el('dt', {}, 'Metric scope'), el('dd', {}, metrics.metric_scope));
+  const board = el('img', {
+    class: 'model-detection-board',
+    src: Api.publicDetectionArtifactUrl(result.run_id, 'board'),
+    alt: `Detected objects on COCO validation image ${result.dataset.image_id}`,
+  });
+  const links = el('div', { class: 'model-artifact-links' },
+    ...Object.entries(result.artifacts).map(([name]) => {
+      const evidence = result.artifact_inventory?.[name];
+      return el('a', {
+        class: 'btn btn-sm', href: Api.publicDetectionArtifactUrl(result.run_id, name), target: '_blank', rel: 'noreferrer',
+        title: evidence?.sha256 ? `SHA-256 ${evidence.sha256} · ${fmtBytes(evidence.size_bytes)}` : 'Provenance record',
+      }, name.replaceAll('_', ' '));
+    }));
+  host.append(metricCards, provenance, board, links,
+    el('p', { class: 'sub' }, 'This is one pinned-image verification. It is not COCO dataset mAP and is not presented as a clinical metric.'));
 }
 
 async function renderPublicBratsResult(host, result) {
@@ -3540,7 +3712,9 @@ function renderPersistentRuns(inventory) {
     const artifactLinks = (run.artifacts?.files || []).map(file => {
       const href = run.kind === 'conversion'
         ? Api.conversionArtifactUrl(run.dataset.id, run.dataset.snapshot, run.run_id, file.name)
-        : Api.publicBratsArtifactUrl(run.run_id, file.name);
+        : run.kind === 'pretrained_detection_validation'
+          ? Api.publicDetectionArtifactUrl(run.run_id, file.name)
+          : Api.publicBratsArtifactUrl(run.run_id, file.name);
       return el('a', { class: 'btn btn-sm', href, target: '_blank', rel: 'noreferrer', title: file.sha256 || 'No persisted artifact hash for this older run' },
         `${file.name} · ${fmtBytes(file.size_bytes)}`);
     });
